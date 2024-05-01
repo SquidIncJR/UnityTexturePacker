@@ -1,0 +1,314 @@
+using System.IO;
+using Unity.Mathematics;
+using UnityEditor;
+using UnityEngine;
+
+public class SAMEMapCreator : EditorWindow
+{
+    //notes
+    // add enum struct for different image sizes to remove human error
+    
+    private Texture2D SmoothnessTex = null;
+    private Texture2D OcclusionTex = null;
+    private Texture2D MetalTex;
+    private Texture2D EmissiveTex;
+
+    private Texture2D previewTex;
+
+    private Material material;
+
+    private float SmoothnessValue = 1;
+    private float OcclusionValue = 1;
+    private float MetalValue = 1;
+    private float EmissiveValue = 1;
+    private int textureXSize = 512;
+    private int textureYSize = 512;
+
+    private bool AlphaSource;
+    private bool InvertSmoothness;
+
+    private string text = "";
+    private string path = "";
+
+    [MenuItem("Tools/OMSTools/SAME Map Creator")]
+    public static void ShowWindow()
+    {
+        var window = GetWindow<SAMEMapCreator>();
+        window.titleContent = new GUIContent("SAME Map Creator");
+    }
+
+    void propertyDrawer(in Texture2D textureIn, in float customValueIn, string textureName , out Texture2D texture, out float customValue)
+    {
+
+        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+        EditorGUILayout.Space(10);
+        texture = (Texture2D)EditorGUILayout.ObjectField(textureName, textureIn, typeof(Texture2D), false);
+        customValue = EditorGUILayout.Slider(customValueIn, 0f, 1f);
+        EditorGUILayout.Space(10);
+        EditorGUILayout.EndVertical();
+    }
+
+    private float TextureChannelValue(Texture2D texture, float value, Vector2 uv)
+    {
+        float channelOut = 0;
+        if (texture)
+        {
+            channelOut = texture.GetPixel((int)uv.x, (int)uv.y).r * value;
+        }
+        else
+        {
+            channelOut = value;
+        }
+        return channelOut;
+    }
+
+    Texture2D duplicateTexture(Texture2D texture)
+    {
+        RenderTexture renderTex = RenderTexture.GetTemporary(textureXSize, textureYSize, 0,
+            RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+        RenderTexture.active = renderTex;   
+        Graphics.Blit(texture, renderTex);
+        
+        RenderTexture previous = RenderTexture.active;
+
+        Texture2D readableTex = new Texture2D(textureXSize, textureYSize);
+        readableTex.ReadPixels(new Rect(0, 0, textureXSize, textureYSize), 0, 0);
+        readableTex.Apply();
+        RenderTexture.active = previous;
+        RenderTexture.ReleaseTemporary(renderTex);
+        return readableTex;
+    }
+
+    private void GenerateTexture()
+    {
+        previewTex = new Texture2D(textureXSize, textureYSize, TextureFormat.RGBA32, true, true);
+        Texture2D r_Smoothness = null;
+        Texture2D r_Occlusion = null;
+        Texture2D r_Metallic = null;
+        Texture2D r_Emissive = null;
+        
+        if (SmoothnessTex)
+        {
+            r_Smoothness = duplicateTexture(SmoothnessTex);           
+        }
+
+        if (OcclusionTex)
+        {
+            r_Occlusion = duplicateTexture(OcclusionTex);           
+        }
+
+        if (MetalTex)
+        {
+            r_Metallic = duplicateTexture(MetalTex);
+        }
+
+        if (EmissiveTex)
+        {
+            r_Emissive = duplicateTexture(EmissiveTex);
+        }
+            
+        
+        for (int x = 0; x < textureXSize; x++)
+        {
+            for (int y = 0; y < textureYSize; y++)
+            {
+                float2 uv = new Vector2(x, y);
+                float R, G, B, A;
+
+                if (AlphaSource)
+                {
+                    R = r_Smoothness.GetPixel(x, y).a * SmoothnessValue;
+
+                }
+                else
+                {
+                    R = TextureChannelValue(r_Smoothness, SmoothnessValue, uv);         
+                }
+                if (InvertSmoothness)
+                {
+                    R = 1 - R;
+                }
+
+                G = TextureChannelValue(r_Occlusion, OcclusionValue, uv);
+                B = TextureChannelValue(r_Metallic, MetalValue, uv);
+                A = TextureChannelValue(r_Emissive, EmissiveValue, uv);
+                
+                previewTex.SetPixel(x,y, new Color(R,G,B,A));
+            }
+        }
+        
+        previewTex.Apply();
+
+    }
+
+    private void OnGUI()
+    {
+        //SAME Textures
+        //smoothness is gained from Albedo Alpha or Metallic Alpha or Specular Alpha or Standalone
+        propertyDrawer(in SmoothnessTex, in SmoothnessValue, "Smoothness", out SmoothnessTex, out SmoothnessValue);
+
+        //switches how the smoothness is grabbed
+        EditorGUILayout.BeginHorizontal();
+        EditorGUILayout.PrefixLabel("Smoothness Source:");
+        AlphaSource = EditorGUILayout.ToggleLeft("Alpha", AlphaSource);
+        InvertSmoothness = EditorGUILayout.ToggleLeft("Invert", InvertSmoothness);
+        EditorGUILayout.EndHorizontal();
+
+        propertyDrawer(in OcclusionTex, in OcclusionValue, "Occlusion", out OcclusionTex, out OcclusionValue);
+
+        propertyDrawer(in MetalTex, in MetalValue, "Metallness", out MetalTex, out MetalValue);
+
+        propertyDrawer(in EmissiveTex, in EmissiveValue, "Emissive", out EmissiveTex, out EmissiveValue);
+
+        material = (Material)EditorGUILayout.ObjectField("Base Material", material, typeof(Material), false);
+        EditorGUILayout.BeginHorizontal();
+        textureXSize = (int)EditorGUILayout.FloatField("Texture X Size", textureXSize);
+        textureYSize = (int)EditorGUILayout.FloatField("Texture Y Size", textureYSize);
+        EditorGUILayout.EndHorizontal();
+        EditorGUILayout.BeginVertical();
+        if (GUILayout.Button("Create Preview Texture"))
+        {
+            GenerateTexture();
+            PreviewWindow prevWindow = (PreviewWindow)EditorWindow.GetWindow(typeof(PreviewWindow), false);
+            prevWindow.firstOpen = true;
+            prevWindow.previewWindowTex = previewTex;
+            prevWindow.Show();
+            
+        }
+
+        if (GUILayout.Button("Create Texture"))
+        {
+            GenerateTexture();
+
+            if (material)
+            {
+                    path = EditorUtility.SaveFilePanelInProject("Save Texture to Directory", material.name + "_SAME", "png",
+                    "saved", path);               
+            }
+            else
+            {
+                path = EditorUtility.SaveFilePanelInProject("Save Texture to Directory", "_SAME", "png",
+                    "saved", path);  
+            }
+            var pngData = previewTex.EncodeToPNG();
+            if (path.Length != 0)
+            {
+                if (pngData != null)
+                {
+                    File.WriteAllBytes(path, pngData);
+                    
+                    AssetDatabase.Refresh();
+            
+                    //meta file change for sRGB colour space
+                    string metalocation = new string(path + ".meta");
+
+                    string[] metaFileContents = File.ReadAllLines(metalocation);
+                    for (int line = 0; line < metaFileContents.Length; line++)
+                    {
+                        if (metaFileContents[line] == "    sRGBTexture: 1")
+                        {
+                            metaFileContents[line] = "    sRGBTexture: 0";
+                        }
+                    }
+                    File.WriteAllLines(metalocation, metaFileContents);
+                    AssetDatabase.Refresh();
+                }
+                Debug.Log("Texture Saved to " + path);
+            }
+        }
+        EditorGUILayout.EndVertical();
+    }
+}
+
+//Quick way to preview the texture without disrupting the settings window
+public class PreviewWindow : EditorWindow
+{
+    public Texture2D previewWindowTex;
+    public bool firstOpen = true;
+    
+    private Texture2D channelPreviewTex;
+    private enum TextureChannel
+    {
+        Red,Green,Blue,Alpha,RGB
+    }
+    private TextureChannel channel = TextureChannel.RGB;
+    
+    public static void ShowWindow()
+    {
+        var window = GetWindow<PreviewWindow>();
+        window.titleContent = new GUIContent("PreviewTexture");
+    }
+    void OnGUI()
+    {
+        if (firstOpen)
+        {
+            TextureChannelPreviewer();
+            firstOpen = false;
+        }
+        if (GUI.Button(new Rect(0, 0, 50, 25), "R"))
+        {
+            channel = TextureChannel.Red;
+            TextureChannelPreviewer();
+        }
+        if (GUI.Button(new Rect(50, 0, 50, 25), "G"))
+        {
+            channel = TextureChannel.Green;
+            TextureChannelPreviewer();
+        }
+        if (GUI.Button(new Rect(100, 0, 50, 25), "B"))
+        {
+            channel = TextureChannel.Blue;
+            TextureChannelPreviewer();
+        }
+        if (GUI.Button(new Rect(150, 0, 50, 25), "A"))
+        {
+            channel = TextureChannel.Alpha;
+            TextureChannelPreviewer();
+        }
+        if (GUI.Button(new Rect(200, 0, 50, 25), "RGB"))
+        {
+            channel = TextureChannel.RGB;
+            TextureChannelPreviewer();
+        }
+        EditorGUI.DrawPreviewTexture(new Rect(0,25,512, 512),channelPreviewTex);
+    }
+
+    private void TextureChannelPreviewer()
+    {
+        channelPreviewTex =
+            new Texture2D(previewWindowTex.width, previewWindowTex.height, TextureFormat.RGBAFloat, true);
+        
+        for (int x = 0; x < previewWindowTex.width; x++)
+        {
+            for (int y = 0; y < previewWindowTex.height; y++)
+            {
+                float R, G, B, A;
+                R = previewWindowTex.GetPixel(x, y).r;
+                G = previewWindowTex.GetPixel(x, y).g;
+                B = previewWindowTex.GetPixel(x, y).b;
+                A = previewWindowTex.GetPixel(x, y).a;
+                
+                switch (channel)
+                {
+                    case TextureChannel.Red:
+                        channelPreviewTex.SetPixel(x,y,new Color(R,R,R,R));
+                        break;
+                    case TextureChannel.Green:
+                        channelPreviewTex.SetPixel(x,y,new Color(G,G,G,G));
+                        break;
+                    case TextureChannel.Blue:
+                        channelPreviewTex.SetPixel(x,y,new Color(B,B,B,B));
+                        break;
+                    case TextureChannel.Alpha:
+                        channelPreviewTex.SetPixel(x,y,new Color(A,A,A,A));
+                        break;
+                    case TextureChannel.RGB:
+                        channelPreviewTex.SetPixel(x,y,new Color(R,G,B,A));
+                        break;
+                }
+
+            }
+        }
+        channelPreviewTex.Apply();
+    }
+}
